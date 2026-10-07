@@ -19,7 +19,7 @@ Request: $ARGUMENTS
 
 Everything this skill writes goes in the plugin's data folder, `${CLAUDE_PLUGIN_DATA}`. An update
 replaces the plugin folder (`${CLAUDE_PLUGIN_ROOT}`) but keeps the data folder, so never write
-there. Python 3.10 or later, standard library only. On Windows use `py -3` or `python`.
+there. Python 3.10 or later, standard library only. `<py>` in the commands below is the Python 3.10+ command: on Windows `py -3`, then `python`; elsewhere `python3`, then `python`.
 
 The data folder holds `sites.json` (the list of mirrored sites), `mirror-dir.txt` (where mirrors are
 kept; written by onboarding) and `fetchers/` (fetchers this skill writes). If `sites.json` does not
@@ -30,7 +30,7 @@ exist yet, run the onboarding skill first.
 Pick a short lowercase `name` (letters, digits, hyphens) for the site; it becomes its folder in the mirror. Then
 look at the site, cheapest check first:
 
-1. **llms.txt**: fetch `<docs root>/llms.txt` (WebFetch or `python -c "import urllib.request as u;print(u.urlopen('<url>').read(2000))"`).
+1. **llms.txt**: fetch `<docs root>/llms.txt` (WebFetch or `<py> -c "import urllib.request as u;print(u.urlopen('<url>').read(2000))"`).
    It qualifies when it lists links in the form `- [Title](https://...)` and a listed page returns
    markdown, not HTML. Check one listed page.
 2. **GitHub markdown repo**: the docs are `.md` files in a public repository (the user gave a
@@ -57,7 +57,8 @@ The shipped fetcher does the rest. Go to step 3.
 2. Write `${CLAUDE_PLUGIN_DATA}/fetchers/<name>_fetcher.py`. It must follow the contract below.
    Copy the example's habits rather than inventing new ones.
 3. Add one entry to `sites.json` that names it. The `fetcher` path is relative to the data folder
-   and must stay inside it:
+   and must live under `fetchers/` in it (a fetcher kept anywhere else is
+   rejected, by real runs and by the check alike):
 
    ```json
    { "name": "mkdocs", "title": "MkDocs docs", "fetcher": "fetchers/mkdocs_fetcher.py" }
@@ -69,7 +70,7 @@ The shipped fetcher does the rest. Go to step 3.
 
 **The contract**
 
-- Command line: `python <script> --site NAME --data-dir DIR --mirror-dir DIR [--limit N] [--delay S] [--timeout S]`.
+- Command line: `<py> <script> --site NAME --data-dir DIR --mirror-dir DIR [--limit N] [--delay S] [--timeout S]`.
   Read the site's own entry from `DIR/sites.json` by `NAME`.
 - Output: one markdown file per page under `<mirror-dir>/<name>/`, an `INDEX.md` with one line per
   page (`- [Title](relative/path.md): summary`), and a `CHANGES.txt` with a summary of what was
@@ -99,7 +100,7 @@ Run the check. It fetches the first few pages of that site into a throwaway fold
 mirror is not touched) and checks that real markdown pages landed:
 
 ```
-python "${CLAUDE_PLUGIN_ROOT}/scripts/onboard.py" --data-dir "${CLAUDE_PLUGIN_DATA}" --check-only --site "<name>"
+<py> "${CLAUDE_PLUGIN_ROOT}/scripts/onboard.py" --data-dir "${CLAUDE_PLUGIN_DATA}" --check-only --site "<name>"
 ```
 
 The last line says `DRY RUN PASSED` or `DRY RUN FAILED`.
@@ -116,7 +117,7 @@ wrote one) and the dry-run result in the helper's words. The full download has n
 Offer to run it now (it can take minutes for a big site):
 
 ```
-python "${CLAUDE_PLUGIN_ROOT}/fetchers/llms_txt_fetcher.py" --data-dir "${CLAUDE_PLUGIN_DATA}"
+<py> "${CLAUDE_PLUGIN_ROOT}/fetchers/llms_txt_fetcher.py" --data-dir "${CLAUDE_PLUGIN_DATA}"
 ```
 
 Then the read-the-docs skill can answer from the new site.

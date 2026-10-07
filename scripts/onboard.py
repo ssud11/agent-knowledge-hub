@@ -27,13 +27,16 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+from fetchers.llms_txt_fetcher import (default_mirror_dir, positive_int,  # noqa: E402
+                                       read_mirror_dir)
 FETCHER = os.path.join(ROOT, "fetchers", "llms_txt_fetcher.py")
 TEMPLATE = os.path.join(ROOT, "sites.json")
 GEMINI = "gemini-api"
 
 
-def default_mirror_dir():
-    return os.path.join(os.path.expanduser("~"), "agent-knowledge-hub-mirror")
+def saved_mirror_dir(data_dir):
+    return read_mirror_dir(data_dir)
 
 
 def save_choice(data_dir, mirror_dir):
@@ -84,8 +87,13 @@ def dry_run(data_dir, limit=3, dry_run_url=None, only_site=None):
     lines = []
     scratch = tempfile.mkdtemp(prefix="akh-dryrun-")
     try:
-        with open(os.path.join(data_dir, "sites.json"), encoding="utf-8") as fh:
-            cfg = json.load(fh)
+        try:
+            with open(os.path.join(data_dir, "sites.json"), encoding="utf-8") as fh:
+                cfg = json.load(fh)
+            cfg["sites"]
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            return False, ["DRY RUN FAILED: cannot read a valid sites.json in %s (%s)"
+                           % (data_dir, exc)]
         if only_site:
             cfg["sites"] = [s for s in cfg["sites"] if s.get("name") == only_site]
             if not cfg["sites"]:
@@ -144,7 +152,7 @@ def main(argv=None):
     ap.add_argument("--data-dir", default=os.environ.get("CLAUDE_PLUGIN_DATA"))
     ap.add_argument("--mirror-dir", default=None,
                     help="default: ~/agent-knowledge-hub-mirror")
-    ap.add_argument("--limit", type=int, default=3, help="pages per site for the dry run")
+    ap.add_argument("--limit", type=positive_int, default=3, help="pages per site for the dry run")
     ap.add_argument("--check-only", action="store_true",
                     help="only run the dry run; save and seed nothing (used by add-docs)")
     ap.add_argument("--site", default=None, help="with --check-only: dry-run just this site")

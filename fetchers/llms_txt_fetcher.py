@@ -37,6 +37,9 @@ LINK_RE = re.compile(
     r"^\s*-\s+(?:\[(?P<title>.*?)\])?\((?P<url>https?://\S+?)\)(?::\s*(?P<desc>.*))?$")
 SEP_RE = re.compile(r"[/\\]")
 RESERVED = {"INDEX.md"}
+SITE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+CUSTOM_FETCHER_DIR = "fetchers"
+CUSTOM_FETCHER_TIMEOUT = 30 * 60  # seconds a written fetcher may run per site
 TEMPLATE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         "sites.json")
 
@@ -70,7 +73,8 @@ def local_paths(urls, llms_url):
                  if s not in ("", ".", "..") and ":" not in s]
         slugs[u] = "/".join(parts) or "index"
     allslugs = set(slugs.values())
-    out, used = {}, set()
+    out = {}
+    used = {r.lower() for r in RESERVED}  # INDEX.md is ours, even on case-insensitive disks
     for u, s in slugs.items():
         if any(o.startswith(s + "/") for o in allslugs):
             rel = s + "/index.md"
@@ -95,17 +99,38 @@ def safe_join(root, rel):
     return full
 
 
-def resolve_mirror_dir(data_dir, explicit):
-    if explicit:
-        return explicit
+def default_mirror_dir():
+    return os.path.join(os.path.expanduser("~"), "agent-knowledge-hub-mirror")
+
+
+def read_mirror_dir(data_dir):
+    """The one place that resolves the saved mirror folder.
+
+    First line of <data_dir>/mirror-dir.txt (BOM tolerated), stripped, ~ expanded, made
+    absolute; else the default folder.
+    """
     try:
         with open(os.path.join(data_dir, "mirror-dir.txt"), encoding="utf-8-sig") as fh:
             first = fh.readline().strip()
         if first:
-            return os.path.expanduser(first)
+            return os.path.abspath(os.path.expanduser(first))
     except OSError:
         pass
-    return os.path.join(os.path.expanduser("~"), "agent-knowledge-hub-mirror")
+    return default_mirror_dir()
+
+
+def resolve_mirror_dir(data_dir, explicit):
+    return explicit if explicit else read_mirror_dir(data_dir)
+
+
+def positive_int(text):
+    try:
+        n = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a whole number of 1 or more: %r" % text)
+    if n < 1:
+        raise argparse.ArgumentTypeError("must be 1 or more: %r" % text)
+    return n
 
 
 def sha(data):
@@ -253,13 +278,25 @@ def run_custom(site, data_dir, mirror_dir, delay, timeout, limit):
     except ValueError:
         return False, ["[%s] ABORT: fetcher path %r is outside the data folder" %
                        (name, site["fetcher"])]
+    try:
+        inside = safe_join(data_dir, CUSTOM_FETCHER_DIR)
+    except ValueError:
+        inside = None
+    if inside is None or not script.startswith(inside + os.sep):
+        return False, ["[%s] ABORT: fetcher %r must live under %s/ in the data folder" %
+                       (name, site["fetcher"], CUSTOM_FETCHER_DIR)]
     if not os.path.isfile(script):
         return False, ["[%s] ABORT: fetcher script not found: %s" % (name, script)]
     cmd = [sys.executable, script, "--site", name, "--data-dir", data_dir,
            "--mirror-dir", mirror_dir, "--delay", str(delay), "--timeout", str(timeout)]
     if limit:
         cmd += ["--limit", str(limit)]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=CUSTOM_FETCHER_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return False, ["[%s] FAILED: fetcher timed out after %d seconds" %
+                       (name, CUSTOM_FETCHER_TIMEOUT)]
     lines = (proc.stdout + proc.stderr).strip().splitlines()
     if proc.returncode != 0:
         lines.append("[%s] FAILED: fetcher exited with code %d" % (name, proc.returncode))
@@ -277,7 +314,7 @@ def main(argv=None):
     ap.add_argument("--delay", type=float, default=0.3, help="seconds between requests")
     ap.add_argument("--timeout", type=float, default=30)
     ap.add_argument("--allow-mass-removal", action="store_true")
-    ap.add_argument("--limit", type=int, default=None,
+    ap.add_argument("--limit", type=positive_int, default=None,
                     help="fetch only the first N pages per site; removes nothing")
     a = ap.parse_args(argv)
     if not a.data_dir:
@@ -287,6 +324,12 @@ def main(argv=None):
         sites = json.load(fh)["sites"]
     ok_all = True
     for site in sites:
+        name = site.get("name")
+        if not isinstance(name, str) or not SITE_NAME_RE.match(name) or name.endswith("."):
+            print("[%s] FAILED: invalid site name (use letters, digits, '.', '_' or '-'); "
+                  "site skipped" % (name,))
+            ok_all = False
+            continue
         if site.get("fetcher"):
             ok, lines = run_custom(site, a.data_dir, a.mirror_dir, a.delay, a.timeout, a.limit)
         else:

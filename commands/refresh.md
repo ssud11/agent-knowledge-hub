@@ -1,6 +1,6 @@
 ---
 description: Refresh every documentation mirror in the sites file and print what changed, with a page count per site.
-allowed-tools: Bash
+allowed-tools: Bash, PowerShell
 disable-model-invocation: true
 ---
 
