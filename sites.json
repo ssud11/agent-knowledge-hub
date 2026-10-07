@@ -1,0 +1,9 @@
+{
+  "sites": [
+    {
+      "name": "gemini-api",
+      "title": "Gemini API docs",
+      "llms_txt": "https://ai.google.dev/gemini-api/docs/llms.txt"
+    }
+  ]
+}
