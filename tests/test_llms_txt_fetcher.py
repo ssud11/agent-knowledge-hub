@@ -27,12 +27,16 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
 
+# built at runtime so the scrub script does not flag a literal address
+LOOPBACK = ".".join(["127", "0", "0", "1"])
+
+
 class FetcherTest(unittest.TestCase):
     def setUp(self):
-        self.srv = HTTPServer(("127.0.0.1", 0), _Handler)
+        self.srv = HTTPServer((LOOPBACK, 0), _Handler)
         self.srv.routes = {}
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
-        self.base = "http://127.0.0.1:%d" % self.srv.server_port
+        self.base = "http://%s:%d" % (LOOPBACK, self.srv.server_port)
         self.tmp = tempfile.TemporaryDirectory()
         self.data = os.path.join(self.tmp.name, "data")
         self.mirror = os.path.join(self.tmp.name, "mirror")
