@@ -12,6 +12,10 @@ Pages are written to <mirror-dir>/<site>/, with INDEX.md and CHANGES.txt.
 Pages on a different host than the llms.txt are skipped (reported, not failed).
 --limit N fetches only the first N pages of each site and deletes nothing
 (used by onboarding's dry run; point it at a throwaway --mirror-dir).
+A sites entry with a "fetcher" key (a script path relative to DIR, e.g. "fetchers/x.py") is
+not an llms.txt site: it is run as
+  python <DIR>/<fetcher> --site NAME --data-dir DIR --mirror-dir DIR --limit N --delay S --timeout S
+and must write pages to <mirror-dir>/NAME/ and exit non-zero on failure (see the add-docs skill).
 Exit code is non-zero if any site aborted or any page failed to fetch.
 Standard library only.
 """
@@ -21,6 +25,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 import urllib.error
@@ -240,6 +245,27 @@ def mirror_site(site, mirror_dir, delay, timeout, allow_mass_removal, limit=None
     return not failed, lines
 
 
+def run_custom(site, data_dir, mirror_dir, delay, timeout, limit):
+    """Run a written fetcher kept in the data folder. Returns (ok, lines)."""
+    name = site["name"]
+    try:
+        script = safe_join(data_dir, site["fetcher"])
+    except ValueError:
+        return False, ["[%s] ABORT: fetcher path %r is outside the data folder" %
+                       (name, site["fetcher"])]
+    if not os.path.isfile(script):
+        return False, ["[%s] ABORT: fetcher script not found: %s" % (name, script)]
+    cmd = [sys.executable, script, "--site", name, "--data-dir", data_dir,
+           "--mirror-dir", mirror_dir, "--delay", str(delay), "--timeout", str(timeout)]
+    if limit:
+        cmd += ["--limit", str(limit)]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    lines = (proc.stdout + proc.stderr).strip().splitlines()
+    if proc.returncode != 0:
+        lines.append("[%s] FAILED: fetcher exited with code %d" % (name, proc.returncode))
+    return proc.returncode == 0, lines
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -261,8 +287,11 @@ def main(argv=None):
         sites = json.load(fh)["sites"]
     ok_all = True
     for site in sites:
-        ok, lines = mirror_site(site, a.mirror_dir, a.delay, a.timeout, a.allow_mass_removal,
-                               a.limit)
+        if site.get("fetcher"):
+            ok, lines = run_custom(site, a.data_dir, a.mirror_dir, a.delay, a.timeout, a.limit)
+        else:
+            ok, lines = mirror_site(site, a.mirror_dir, a.delay, a.timeout,
+                                    a.allow_mass_removal, a.limit)
         print("\n".join(lines))
         ok_all = ok_all and ok
     return 0 if ok_all else 1

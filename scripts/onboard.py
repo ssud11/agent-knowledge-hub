@@ -13,6 +13,8 @@ Usage:
    (the real mirror is not touched) and checks that real markdown pages landed.
    --dry-run-url replaces every site's llms.txt URL for the dry run only (used to test the
    failure path with an unreachable address).
+--check-only runs just the dry run (optionally --site NAME) and writes nothing in the data
+   folder; add-docs uses it to prove a new entry or fetcher works.
 Exit code 0 only when the dry run passed. The choice is saved even when it fails.
 Standard library only.
 """
@@ -78,19 +80,27 @@ def _md_pages(root):
     return pages, bad
 
 
-def dry_run(data_dir, limit=3, dry_run_url=None):
+def dry_run(data_dir, limit=3, dry_run_url=None, only_site=None):
     lines = []
     scratch = tempfile.mkdtemp(prefix="akh-dryrun-")
     try:
         with open(os.path.join(data_dir, "sites.json"), encoding="utf-8") as fh:
             cfg = json.load(fh)
+        if only_site:
+            cfg["sites"] = [s for s in cfg["sites"] if s.get("name") == only_site]
+            if not cfg["sites"]:
+                return False, ["DRY RUN FAILED: no site named %r in sites.json" % only_site]
         if dry_run_url:
             for s in cfg["sites"]:
-                s["llms_txt"] = dry_run_url
+                if not s.get("fetcher"):
+                    s["llms_txt"] = dry_run_url
         ddir = os.path.join(scratch, "data")
         os.makedirs(ddir)
         with open(os.path.join(ddir, "sites.json"), "w", encoding="utf-8") as fh:
             json.dump(cfg, fh)
+        written = os.path.join(data_dir, "fetchers")  # fetchers written by add-docs
+        if os.path.isdir(written):
+            shutil.copytree(written, os.path.join(ddir, "fetchers"))
         mdir = os.path.join(scratch, "mirror")
         proc = subprocess.run(
             [sys.executable, FETCHER, "--data-dir", ddir, "--mirror-dir", mdir,
@@ -135,11 +145,18 @@ def main(argv=None):
     ap.add_argument("--mirror-dir", default=None,
                     help="default: ~/agent-knowledge-hub-mirror")
     ap.add_argument("--limit", type=int, default=3, help="pages per site for the dry run")
+    ap.add_argument("--check-only", action="store_true",
+                    help="only run the dry run; save and seed nothing (used by add-docs)")
+    ap.add_argument("--site", default=None, help="with --check-only: dry-run just this site")
     ap.add_argument("--dry-run-url", default=None,
                     help="override every site's llms.txt URL for the dry run only")
     a = ap.parse_args(argv)
     if not a.data_dir:
         ap.error("--data-dir is required (or set CLAUDE_PLUGIN_DATA)")
+    if a.check_only:
+        ok, lines = dry_run(a.data_dir, a.limit, a.dry_run_url, a.site)
+        print(chr(10).join(lines))
+        return 0 if ok else 1
     ok, lines = run(a.data_dir, a.mirror_dir, a.limit, a.dry_run_url)
     print("\n".join(lines))
     return 0 if ok else 1
