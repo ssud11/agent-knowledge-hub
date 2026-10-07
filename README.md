@@ -44,7 +44,7 @@ By default, the mirror is stored in `agent-knowledge-hub-mirror` in your home fo
 - **Mirror.** `fetchers/llms_txt_fetcher.py` reads a site's `llms.txt`, fetches every listed page as markdown, and writes an `INDEX.md`. Each run records what was added, changed and removed in `CHANGES.txt`, by content hash. A failed fetch keeps the previous copy, requests are paced, and the fetcher will not wipe most of a mirror in one run. Python standard library only.
 - **Read-the-docs skill.** Before answering about a mirrored tool, the agent finds the topic in `INDEX.md`, reads the page, and cites the file. The mirror takes priority over the model's memory.
 - **Onboarding skill.** Asks where to keep your mirrors, suggests your home folder, saves the choice, and confirms it with a test fetch.
-- **Refresh command.** `/refresh` updates the mirror and prints what changed.
+- **Refresh command.** `/agent-knowledge-hub:refresh` updates the mirror and prints what changed.
 - **add-docs skill.** Mirrors any other tool with usable documentation. An `llms.txt` site takes one line in the sites file. Other kinds get a fetcher written from the shipped one.
 - **Teach.** A new-study skill creates a study folder whose rules require every lesson claim to cite the mirror page it came from. The lessons come from [Matt Pocock's teach skill](https://github.com/mattpocock/skills), installed separately.
 - **OKF.** A sample lesson, also packaged as an [OKF v0.2](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) bundle.
