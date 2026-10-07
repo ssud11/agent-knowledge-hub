@@ -1,0 +1,7 @@
+{
+  "name": "agent-knowledge-hub",
+  "version": "0.1.0",
+  "description": "Build and use a local knowledge hub of tool documentation for coding agents.",
+  "author": { "name": "ssud11" },
+  "license": "MIT"
+}

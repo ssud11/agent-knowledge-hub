@@ -1,0 +1,12 @@
+{
+  "name": "agent-knowledge-hub-marketplace",
+  "description": "Marketplace for the agent-knowledge-hub plugin.",
+  "owner": { "name": "ssud11" },
+  "plugins": [
+    {
+      "name": "agent-knowledge-hub",
+      "source": "./",
+      "description": "Build and use a local knowledge hub of tool documentation for coding agents."
+    }
+  ]
+}
