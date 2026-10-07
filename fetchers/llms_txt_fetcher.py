@@ -6,7 +6,11 @@ Usage:
       [--delay SECONDS] [--timeout SECONDS] [--allow-mass-removal]
 
 DIR (--data-dir) holds sites.json (seeded from the repo template if missing).
+--mirror-dir defaults to the first line of <data-dir>/mirror-dir.txt when that
+file exists, else ~/agent-knowledge-hub-mirror.
 Pages are written to <mirror-dir>/<site>/, with INDEX.md and CHANGES.txt.
+Pages on a different host than the llms.txt are skipped (reported, not failed).
+Exit code is non-zero if any site aborted or any page failed to fetch.
 Standard library only.
 """
 import argparse
@@ -24,6 +28,7 @@ import urllib.request
 USER_AGENT = "agent-knowledge-hub-fetcher/0.1 (documentation mirror; stdlib urllib)"
 LINK_RE = re.compile(
     r"^\s*-\s+(?:\[(?P<title>.*?)\])?\((?P<url>https?://\S+?)\)(?::\s*(?P<desc>.*))?$")
+SEP_RE = re.compile(r"[/\\]")
 RESERVED = {"INDEX.md"}
 TEMPLATE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         "sites.json")
@@ -54,16 +59,46 @@ def local_paths(urls, llms_url):
             if p.endswith(suf):
                 p = p[:-len(suf)]
                 break
-        parts = [s for s in p.split("/") if s not in ("", ".", "..")]
+        parts = [s for s in SEP_RE.split(p)
+                 if s not in ("", ".", "..") and ":" not in s]
         slugs[u] = "/".join(parts) or "index"
     allslugs = set(slugs.values())
-    out = {}
+    out, used = {}, set()
     for u, s in slugs.items():
         if any(o.startswith(s + "/") for o in allslugs):
-            out[u] = s + "/index.md"
+            rel = s + "/index.md"
         else:
-            out[u] = s + ".md"
+            rel = s + ".md"
+        n = 1
+        base = rel[:-3]
+        while rel.lower() in used:
+            n += 1
+            rel = "%s-%d.md" % (base, n)
+        used.add(rel.lower())
+        out[u] = rel
     return out
+
+
+def safe_join(root, rel):
+    """Join rel under root; raise ValueError if the result leaves root."""
+    rroot = os.path.realpath(root)
+    full = os.path.realpath(os.path.join(rroot, *SEP_RE.split(rel)))
+    if full != rroot and not full.startswith(rroot + os.sep):
+        raise ValueError("path escapes site folder: %r" % rel)
+    return full
+
+
+def resolve_mirror_dir(data_dir, explicit):
+    if explicit:
+        return explicit
+    try:
+        with open(os.path.join(data_dir, "mirror-dir.txt"), encoding="utf-8-sig") as fh:
+            first = fh.readline().strip()
+        if first:
+            return os.path.expanduser(first)
+    except OSError:
+        pass
+    return os.path.join(os.path.expanduser("~"), "agent-knowledge-hub-mirror")
 
 
 def sha(data):
@@ -95,7 +130,9 @@ def _scan(root):
     return found
 
 
-def _atomic_write(path, data):
+def _atomic_write(path, data, root=None):
+    if root is not None:
+        path = safe_join(root, os.path.relpath(path, root))
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "wb") as fh:
@@ -111,29 +148,40 @@ def mirror_site(site, mirror_dir, delay, timeout, allow_mass_removal):
     def say(s):
         lines.append(s)
 
+    def abort(msg):
+        say(msg)
+        if os.path.isdir(root):
+            stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            _atomic_write(os.path.join(root, "CHANGES.txt"),
+                          ("run: %s\n" % stamp + "\n".join(lines) + "\n").encode("utf-8"),
+                          root)
+        return False, lines
+
     try:
         text = http_get(site["llms_txt"], timeout).decode("utf-8")
     except Exception as e:
-        say("[%s] ABORT: could not fetch llms.txt (%s); mirror untouched" % (name, e))
-        return False, lines
+        return abort("[%s] ABORT: could not fetch llms.txt (%s); mirror untouched" % (name, e))
     entries = parse_llms_txt(text)
     if not entries:
-        say("[%s] ABORT: llms.txt listed no links; mirror untouched" % name)
-        return False, lines
-    paths = local_paths([e["url"] for e in entries], site["llms_txt"])
-    seen, uniq = set(), []
+        return abort("[%s] ABORT: llms.txt listed no links; mirror untouched" % name)
+    host = urllib.parse.urlparse(site["llms_txt"]).netloc.lower()
+    seen, uniq, skipped = set(), [], []
     for e in entries:
-        if e["url"] not in seen:
-            seen.add(e["url"])
+        if e["url"] in seen:
+            continue
+        seen.add(e["url"])
+        if urllib.parse.urlparse(e["url"]).netloc.lower() != host:
+            skipped.append(e["url"])
+        else:
             uniq.append(e)
     entries = uniq
+    paths = local_paths([e["url"] for e in entries], site["llms_txt"])
     wanted = {paths[e["url"]] for e in entries}
     existing = _scan(root) if os.path.isdir(root) else {}
     gone = sorted(set(existing) - wanted)
     if existing and len(gone) * 2 > len(existing) and not allow_mass_removal:
-        say("[%s] ABORT: %d of %d existing pages would be removed; no changes made "
-            "(use --allow-mass-removal to override)" % (name, len(gone), len(existing)))
-        return False, lines
+        return abort("[%s] ABORT: %d of %d existing pages would be removed; no changes made "
+                     "(use --allow-mass-removal to override)" % (name, len(gone), len(existing)))
 
     added, changed, failed = [], [], []
     for i, e in enumerate(entries):
@@ -147,17 +195,21 @@ def mirror_site(site, mirror_dir, delay, timeout, allow_mass_removal):
         except Exception as ex:
             failed.append((rel, str(ex)))
             continue
-        dest = os.path.join(root, *rel.split("/"))
+        try:
+            dest = safe_join(root, rel)
+        except ValueError as ex:
+            failed.append((rel, str(ex)))
+            continue
         if rel not in existing:
             added.append(rel)
         elif existing[rel] != sha(body):
             changed.append(rel)
         else:
             continue
-        _atomic_write(dest, body)
+        _atomic_write(dest, body, root)
 
     for rel in gone:
-        os.remove(os.path.join(root, *rel.split("/")))
+        os.remove(safe_join(root, rel))
     for dp, dn, fn in os.walk(root, topdown=False):
         if dp != root and not os.listdir(dp):
             os.rmdir(dp)
@@ -167,20 +219,23 @@ def mirror_site(site, mirror_dir, delay, timeout, allow_mass_removal):
         rel = paths[e["url"]]
         title = e["title"] or rel.rsplit("/", 1)[-1][:-3]
         idx.append("- [%s](%s): %s" % (title, rel, e["desc"]))
-    _atomic_write(os.path.join(root, "INDEX.md"), ("\n".join(idx) + "\n").encode("utf-8"))
+    _atomic_write(os.path.join(root, "INDEX.md"), ("\n".join(idx) + "\n").encode("utf-8"),
+                  root)
 
     pages = len(_scan(root))
     say("[%s] added: %d, changed: %d, removed: %d" % (name, len(added), len(changed), len(gone)))
-    say("[%s] pages: %d, failed: %d" % (name, pages, len(failed)))
+    say("[%s] pages: %d, failed: %d, skipped: %d" % (name, pages, len(failed), len(skipped)))
     for label, items in (("added", added), ("changed", changed), ("removed", gone)):
         for rel in items:
             say("  %s %s" % (label, rel))
+    for url in skipped:
+        say("  SKIPPED off-host %s" % url)
     for rel, why in failed:
         say("  FAILED %s (old copy kept if present): %s" % (rel, why))
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
     _atomic_write(os.path.join(root, "CHANGES.txt"),
-                  ("run: %s\n" % stamp + "\n".join(lines) + "\n").encode("utf-8"))
-    return True, lines
+                  ("run: %s\n" % stamp + "\n".join(lines) + "\n").encode("utf-8"), root)
+    return not failed, lines
 
 
 def main(argv=None):
@@ -188,14 +243,16 @@ def main(argv=None):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data-dir", default=os.environ.get("CLAUDE_PLUGIN_DATA"),
                     help="folder holding sites.json (fallback: $CLAUDE_PLUGIN_DATA)")
-    ap.add_argument("--mirror-dir",
-                    default=os.path.join(os.path.expanduser("~"), "agent-knowledge-hub-mirror"))
+    ap.add_argument("--mirror-dir", default=None,
+                    help="default: first line of <data-dir>/mirror-dir.txt, "
+                         "else ~/agent-knowledge-hub-mirror")
     ap.add_argument("--delay", type=float, default=0.3, help="seconds between requests")
     ap.add_argument("--timeout", type=float, default=30)
     ap.add_argument("--allow-mass-removal", action="store_true")
     a = ap.parse_args(argv)
     if not a.data_dir:
         ap.error("--data-dir is required (or set CLAUDE_PLUGIN_DATA)")
+    a.mirror_dir = resolve_mirror_dir(a.data_dir, a.mirror_dir)
     with open(seed_sites_json(a.data_dir), encoding="utf-8") as fh:
         sites = json.load(fh)["sites"]
     ok_all = True
