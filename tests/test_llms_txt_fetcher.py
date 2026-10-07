@@ -84,6 +84,19 @@ class FetcherTest(unittest.TestCase):
         self.assertIn("added: 3", out)
         self.assertIn("pages: 3", out)
 
+    def test_limit_fetches_only_first_pages_and_removes_nothing(self):
+        self.run_cli()
+        code, out = self.run_cli("--limit", "1")
+        self.assertEqual(code, 0)
+        self.assertTrue(os.path.exists(os.path.join(self.mirror, "s", "docs", "home.md")))
+        self.assertTrue(os.path.exists(os.path.join(self.mirror, "s", "docs", "a", "b.md")))
+        fresh = os.path.join(self.tmp.name, "fresh")
+        code, out = self.run_cli("--limit", "1", "--mirror-dir", fresh)
+        self.assertEqual(code, 0)
+        pages = [n for _, _, fs in os.walk(os.path.join(fresh, "s")) for n in fs
+                 if n.endswith(".md") and n != "INDEX.md"]
+        self.assertEqual(len(pages), 1)
+
     def test_second_run_reports_no_changes(self):
         self.run_cli()
         code, out = self.run_cli()
