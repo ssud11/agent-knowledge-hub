@@ -3,13 +3,15 @@
 
 Usage:
   python fetchers/llms_txt_fetcher.py --data-dir DIR [--mirror-dir DIR]
-      [--delay SECONDS] [--timeout SECONDS] [--allow-mass-removal]
+      [--delay SECONDS] [--timeout SECONDS] [--allow-mass-removal] [--limit N]
 
 DIR (--data-dir) holds sites.json (seeded from the repo template if missing).
 --mirror-dir defaults to the first line of <data-dir>/mirror-dir.txt when that
 file exists, else ~/agent-knowledge-hub-mirror.
 Pages are written to <mirror-dir>/<site>/, with INDEX.md and CHANGES.txt.
 Pages on a different host than the llms.txt are skipped (reported, not failed).
+--limit N fetches only the first N pages of each site and deletes nothing
+(used by onboarding's dry run; point it at a throwaway --mirror-dir).
 Exit code is non-zero if any site aborted or any page failed to fetch.
 Standard library only.
 """
@@ -140,7 +142,7 @@ def _atomic_write(path, data, root=None):
     os.replace(tmp, path)
 
 
-def mirror_site(site, mirror_dir, delay, timeout, allow_mass_removal):
+def mirror_site(site, mirror_dir, delay, timeout, allow_mass_removal, limit=None):
     name = site["name"]
     root = os.path.join(mirror_dir, name)
     lines = []
@@ -174,11 +176,11 @@ def mirror_site(site, mirror_dir, delay, timeout, allow_mass_removal):
             skipped.append(e["url"])
         else:
             uniq.append(e)
-    entries = uniq
+    entries = uniq[:limit] if limit else uniq
     paths = local_paths([e["url"] for e in entries], site["llms_txt"])
     wanted = {paths[e["url"]] for e in entries}
     existing = _scan(root) if os.path.isdir(root) else {}
-    gone = sorted(set(existing) - wanted)
+    gone = [] if limit else sorted(set(existing) - wanted)
     if existing and len(gone) * 2 > len(existing) and not allow_mass_removal:
         return abort("[%s] ABORT: %d of %d existing pages would be removed; no changes made "
                      "(use --allow-mass-removal to override)" % (name, len(gone), len(existing)))
@@ -249,6 +251,8 @@ def main(argv=None):
     ap.add_argument("--delay", type=float, default=0.3, help="seconds between requests")
     ap.add_argument("--timeout", type=float, default=30)
     ap.add_argument("--allow-mass-removal", action="store_true")
+    ap.add_argument("--limit", type=int, default=None,
+                    help="fetch only the first N pages per site; removes nothing")
     a = ap.parse_args(argv)
     if not a.data_dir:
         ap.error("--data-dir is required (or set CLAUDE_PLUGIN_DATA)")
@@ -257,7 +261,8 @@ def main(argv=None):
         sites = json.load(fh)["sites"]
     ok_all = True
     for site in sites:
-        ok, lines = mirror_site(site, a.mirror_dir, a.delay, a.timeout, a.allow_mass_removal)
+        ok, lines = mirror_site(site, a.mirror_dir, a.delay, a.timeout, a.allow_mass_removal,
+                               a.limit)
         print("\n".join(lines))
         ok_all = ok_all and ok
     return 0 if ok_all else 1
