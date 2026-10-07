@@ -160,6 +160,103 @@ class FetcherTest(unittest.TestCase):
         self.assertEqual(m[urls[1]], "docs/x/y.md")
         self.assertNotIn("..", m[urls[2]])
 
+    # --- review-fix findings ---
+
+    def test_encoded_backslash_traversal_stays_inside_site_root(self):
+        urls = ["https://h/g/docs/a%5C..%5C..%5Cpwn.md.txt",
+                "https://h/g/docs/C%3A%5Cevil.md.txt"]
+        m = f.local_paths(urls, "https://h/g/docs/llms.txt")
+        for rel in m.values():
+            self.assertNotIn("\\", rel)
+            self.assertNotIn(":", rel)
+            self.assertNotIn("..", rel.split("/"))
+
+    def test_safe_join_rejects_escape(self):
+        with self.assertRaises(ValueError):
+            f.safe_join(self.mirror, "../outside.md")
+        self.assertTrue(f.safe_join(self.mirror, "a/b.md").startswith(
+            os.path.realpath(self.mirror)))
+
+    def test_hostile_url_does_not_write_outside_root(self):
+        self.set_site({
+            "/g/docs/llms.txt": "- [P](%s/g/docs/a%%5C..%%5C..%%5Cpwn.md.txt): p\n" % self.base,
+            "/g/docs/a%5C..%5C..%5Cpwn.md.txt": "pwn"})
+        self.run_cli()
+        self.assertFalse(os.path.exists(os.path.join(self.mirror, "pwn.md")))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "pwn.md")))
+
+    def test_failed_page_makes_run_fail_but_keeps_summary(self):
+        self.run_cli()
+        self.srv.routes["/g/docs/home.md.txt"] = (500, "boom")
+        code, out = self.run_cli()
+        self.assertEqual(code, 1)
+        self.assertEqual(self.page("docs/home.md"), "home v1")
+        with open(os.path.join(self.mirror, "s", "CHANGES.txt")) as fh:
+            self.assertIn("failed: 1", fh.read())
+
+    def test_mirror_dir_default_read_from_data_dir_file(self):
+        target = os.path.join(self.tmp.name, "elsewhere")
+        with open(os.path.join(self.data, "mirror-dir.txt"), "w") as fh:
+            fh.write(target + "\nignored second line\n")
+        self.assertEqual(f.resolve_mirror_dir(self.data, None), target)
+        self.assertEqual(f.resolve_mirror_dir(self.data, "x"), "x")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = f.main(["--data-dir", self.data, "--delay", "0"])
+        self.assertEqual(code, 0)
+        self.assertTrue(os.path.exists(os.path.join(target, "s", "docs", "home.md")))
+
+    def test_mirror_dir_default_falls_back_to_home_folder(self):
+        got = f.resolve_mirror_dir(self.data, None)
+        self.assertEqual(got, os.path.join(os.path.expanduser("~"),
+                                           "agent-knowledge-hub-mirror"))
+
+    def test_colliding_slugs_get_distinct_paths(self):
+        urls = ["https://h/g/docs.md.txt", "https://h/g/docs/index.md.txt",
+                "https://h/g/docs/x.md.txt"]
+        m = f.local_paths(urls, "https://h/g/docs/llms.txt")
+        self.assertEqual(len(set(v.lower() for v in m.values())), 3)
+
+    def test_colliding_urls_both_stored(self):
+        self.set_site({
+            "/g/docs/llms.txt": "- [A](%s/g/docs.md.txt): a\n"
+            "- [B](%s/g/docs/index.md.txt): b\n- [C](%s/g/docs/x.md.txt): c\n"
+            % ((self.base,) * 3),
+            "/g/docs.md.txt": "AAA", "/g/docs/index.md.txt": "BBB",
+            "/g/docs/x.md.txt": "CCC"})
+        code, out = self.run_cli()
+        self.assertIn("pages: 3", out)
+        self.assertEqual(code, 0)
+
+    def test_abort_writes_changes_txt_when_site_folder_exists(self):
+        self.run_cli()
+        self.srv.routes.pop("/g/docs/llms.txt")
+        code, out = self.run_cli()
+        self.assertNotEqual(code, 0)
+        with open(os.path.join(self.mirror, "s", "CHANGES.txt")) as fh:
+            text = fh.read()
+        self.assertIn("ABORT", text)
+        self.assertRegex(text, r"run: [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}.[0-9]{2}.[0-9]{2}")
+        self.assertEqual(self.page("docs/home.md"), "home v1")
+
+    def test_abort_without_site_folder_creates_nothing(self):
+        self.srv.routes.pop("/g/docs/llms.txt")
+        code, out = self.run_cli()
+        self.assertNotEqual(code, 0)
+        self.assertFalse(os.path.exists(os.path.join(self.mirror, "s")))
+
+    def test_off_host_urls_skipped_not_failed(self):
+        self.set_site({
+            "/g/docs/llms.txt": "- [Home](%s/g/docs/home.md.txt): h\n"
+            "- [Far](https://elsewhere.invalid/g/docs/far.md.txt): f\n" % self.base,
+            "/g/docs/home.md.txt": "home v1"})
+        code, out = self.run_cli()
+        self.assertEqual(code, 0)
+        self.assertIn("skipped: 1", out)
+        self.assertIn("failed: 0", out)
+        self.assertFalse(os.path.exists(os.path.join(self.mirror, "s", "docs", "far.md")))
+        self.assertNotIn("far.md", self.page("INDEX.md"))
+
 
 if __name__ == "__main__":
     unittest.main()

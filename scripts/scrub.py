@@ -9,7 +9,12 @@ Layer 2: optional private terms, read from the file named by the
 AKH_SCRUB_TERMS_FILE env var (one term per line, '#' comments, 're:'
 prefix for a regex, otherwise a case-insensitive literal).
 
-A line carrying the marker "scrub: allow" is skipped.
+A line carrying the marker "scrub: allow" is skipped (files only).
+Files are decoded as UTF-8, UTF-16 (BOM) or, failing that, with replacement
+characters; only binary files (NUL bytes) are skipped, and listed by name.
+Commit metadata (author/committer name and email, message) of unpushed commits
+is scanned with the same patterns; noreply addresses are allowed. Range: commits
+not on the upstream, all of HEAD without one, or <ref>..HEAD with --since-ref.
 Exit codes: 0 clean, 1 hits, 2 setup error.
 """
 import argparse
@@ -92,41 +97,124 @@ def load_terms():
     return terms
 
 
-def scan(root, terms):
+def decode_bytes(data):
+    """Return text, or None for binary content. Never raises on bad bytes."""
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16", errors="replace")
+    if data.startswith(b"\xef\xbb\xbf"):
+        return data[3:].decode("utf-8", errors="replace")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        if b"\0" in data:
+            return None
+        return data.decode("utf-8", errors="replace")
+
+
+def scan_text(label, text, terms, hits, allow_marker=True):
+    for i, line in enumerate(text.splitlines(), 1):
+        if allow_marker and ALLOW_MARKER in line:
+            continue
+        for pname, rx in COMPILED:
+            if rx.search(line):
+                hits.append("%s:%d: %s" % (label, i, pname))
+                break
+        for n, rx in enumerate(terms, 1):
+            if rx.search(line):
+                hits.append("%s:%d: private-term #%d" % (label, i, n))
+
+
+def scan(root, terms, skipped=None):
     hits = []
+    if skipped is None:
+        skipped = []
     for name in list_files(root):
         for h in path_hits(name):
             hits.append("%s:0: %s" % (name, h))
         try:
-            text = (root / name).read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
+            data = (root / name).read_bytes()
+        except OSError:
+            skipped.append("%s (unreadable)" % name)
+            continue
+        text = decode_bytes(data)
+        if text is None:
+            skipped.append("%s (binary)" % name)
             continue
         if name.replace("\\", "/").endswith("SKILL.md") and re.search(
                 r"(?m)^name:\s*teach\s*$", text):
             hits.append("%s:1: teach-skill" % name)
-        for i, line in enumerate(text.splitlines(), 1):
-            if ALLOW_MARKER in line:
-                continue
-            for pname, rx in COMPILED:
-                if rx.search(line):
-                    hits.append("%s:%d: %s" % (name, i, pname))
-                    break
-            for n, rx in enumerate(terms, 1):
-                if rx.search(line):
-                    hits.append("%s:%d: private-term #%d" % (name, i, n))
+        scan_text(name, text, terms, hits)
+    return hits
+
+
+NOREPLY_RE = re.compile(r"(?i)\bnoreply@[\w.-]+")
+COMMIT_FIELDS = ("author-name", "author-email", "committer-name",
+                 "committer-email", "message")
+
+
+def git_out(root, *args):
+    return subprocess.run(["git", *args], cwd=root, capture_output=True)
+
+
+def commit_range(root, since_ref):
+    """Return the rev-range to scan, or None when there are no commits."""
+    if git_out(root, "rev-parse", "--verify", "-q", "HEAD").returncode != 0:
+        return None
+    if since_ref:
+        if git_out(root, "rev-parse", "--verify", "-q",
+                   since_ref + "^{commit}").returncode != 0:
+            raise ValueError("unknown --since-ref")
+        return since_ref + "..HEAD"
+    if git_out(root, "rev-parse", "--verify", "-q", "@{u}").returncode == 0:
+        return "@{u}..HEAD"
+    return "HEAD"
+
+
+def scan_commits(root, terms, since_ref=None):
+    """Scan author/committer name+email and message of unpushed commits."""
+    rng = commit_range(root, since_ref)
+    if rng is None:
+        return []
+    out = git_out(root, "log", "--format=%h%x1f%an%x1f%ae%x1f%cn%x1f%ce%x1f%B%x1e",
+                  rng).stdout.decode("utf-8", "replace")
+    hits = []
+    for rec in out.split("\x1e"):
+        rec = rec.strip("\n")
+        if not rec.strip():
+            continue
+        parts = rec.split("\x1f", 5)
+        if len(parts) != 6:
+            continue
+        for field, value in zip(COMMIT_FIELDS, parts[1:]):
+            text = NOREPLY_RE.sub("", value)
+            sub = []
+            scan_text("commit %s:%s" % (parts[0], field), text, terms, sub,
+                      allow_marker=False)
+            hits.extend(sub)
     return hits
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--root", default=".")
-    root = Path(ap.parse_args().root).resolve()
+    ap.add_argument("--since-ref", default=None,
+                    help="scan commit metadata in <ref>..HEAD (default: commits "
+                         "not on the upstream, or all of HEAD when none)")
+    args = ap.parse_args()
+    root = Path(args.root).resolve()
     terms = load_terms()
+    skipped = []
     try:
-        hits = scan(root, terms)
+        hits = scan(root, terms, skipped)
+        hits += scan_commits(root, terms, args.since_ref)
+    except ValueError as e:
+        print("error: %s" % e, file=sys.stderr)
+        return 2
     except (subprocess.CalledProcessError, OSError):
         print("error: could not list files (is this a git repo?)", file=sys.stderr)
         return 2
+    for s in skipped:
+        print("skipped: %s" % s)
     for h in hits:
         print(h)
     if hits:

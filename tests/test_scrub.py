@@ -126,6 +126,68 @@ class GenericPatterns(ScrubCase):
         self.assertEqual(self.run_scrub().returncode, 0)
 
 
+class EncodingAndHistory(ScrubCase):
+    def write_bytes(self, name, data):
+        p = self.root / name
+        p.write_bytes(data)
+        self.git("add", name)
+
+    def commit(self, msg, name="Dev", email=NOREPLY):
+        self.git("-c", "user.name=" + name, "-c", "user.email=" + email,
+                 "commit", "-q", "--allow-empty", "-m", msg)
+
+    def test_utf16_bom_file_is_scanned(self):
+        self.write_bytes("u16.txt", ("hi\nip " + FAKE_IP + "\n").encode("utf-16"))
+        r = self.run_scrub()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("u16.txt:2", r.stdout)
+
+    def test_non_utf8_file_decoded_with_replace_and_scanned(self):
+        self.write_bytes("l1.txt", b"caf\xe9\nip " + FAKE_IP.encode() + b"\n")
+        r = self.run_scrub()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("l1.txt:2", r.stdout)
+
+    def test_binary_file_reported_as_skipped_by_name(self):
+        self.write_bytes("blob.bin", b"\x00\x01\xff\xfe\x00\x80")
+        r = self.run_scrub()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("blob.bin", r.stdout)
+        self.assertIn("skipped", r.stdout)
+
+    def test_commit_email_fails_without_echo(self):
+        self.write("a.txt", "ok\n")
+        self.commit("msg", email=FAKE_EMAIL)
+        r = self.run_scrub()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("author-email", r.stdout)
+        self.assertNotIn(FAKE_EMAIL, r.stdout + r.stderr)
+
+    def test_commit_message_and_name_checked(self):
+        self.write("a.txt", "ok\n")
+        self.commit("path " + WIN_PATH, name="n " + FAKE_IP)
+        r = self.run_scrub()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("message", r.stdout)
+        self.assertIn("author-name", r.stdout)
+
+    def test_noreply_commit_metadata_allowed(self):
+        self.write("a.txt", "ok\n")
+        self.commit("work\n\nCo-Authored-By: Bot <noreply" + "@example.com>")
+        self.assertEqual(self.run_scrub().returncode, 0)
+
+    def test_since_ref_limits_range(self):
+        self.write("a.txt", "ok\n")
+        self.commit("old", email=FAKE_EMAIL)
+        self.git("tag", "base")
+        self.commit("new")
+        self.assertEqual(self.run_scrub().returncode, 1)
+        out = subprocess.run(
+            [sys.executable, str(SCRUB), "--root", str(self.root),
+             "--since-ref", "base"], capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+
 class PrivateTerms(ScrubCase):
     def test_private_term_fails_without_echo(self):
         term = "zq" + "xjunk"
