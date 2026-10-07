@@ -34,10 +34,10 @@ update keeps: `${CLAUDE_PLUGIN_DATA}`.
    dry run. Omit `--mirror-dir` to take the home-folder default.
 
    ```
-   python "${CLAUDE_PLUGIN_ROOT}/scripts/onboard.py" --data-dir "${CLAUDE_PLUGIN_DATA}" --mirror-dir "<folder>"
+   <py> "${CLAUDE_PLUGIN_ROOT}/scripts/onboard.py" --data-dir "${CLAUDE_PLUGIN_DATA}" --mirror-dir "<folder>"
    ```
 
-   (On Windows use `py -3` or `python`; Python 3.10 or later is needed. Quote the folder if it has spaces.)
+   `<py>` in the commands below is the Python 3.10+ command: on Windows `py -3`, then `python`; elsewhere `python3`, then `python`. Quote the folder if it has spaces.
 3. Read the helper's output and report it as it is.
    - The dry run fetches the first few pages of each site into a throwaway folder, never the real
      mirror, then checks that real markdown pages landed. The last line says `DRY RUN PASSED` or
@@ -49,7 +49,7 @@ update keeps: `${CLAUDE_PLUGIN_DATA}`.
    command that downloads it (a few minutes for the Gemini docs) is:
 
    ```
-   python "${CLAUDE_PLUGIN_ROOT}/fetchers/llms_txt_fetcher.py" --data-dir "${CLAUDE_PLUGIN_DATA}"
+   <py> "${CLAUDE_PLUGIN_ROOT}/fetchers/llms_txt_fetcher.py" --data-dir "${CLAUDE_PLUGIN_DATA}"
    ```
 
    Run it only if the user asks. After it, the read-the-docs skill answers from that folder; it reads

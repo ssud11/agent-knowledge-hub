@@ -31,10 +31,10 @@ the study folder.
    (not inside it), `<name>-practice`.
 
    ```
-   python "${CLAUDE_PLUGIN_ROOT}/scripts/new_study.py" --data-dir "${CLAUDE_PLUGIN_DATA}" --name "<name>" --parent "<parent folder>"
+   <py> "${CLAUDE_PLUGIN_ROOT}/scripts/new_study.py" --data-dir "${CLAUDE_PLUGIN_DATA}" --name "<name>" --parent "<parent folder>"
    ```
 
-   (On Windows use `py -3` or `python`; Python 3.10 or later is needed.) A non-zero exit means
+   (`<py>` in the commands below is the Python 3.10+ command: on Windows `py -3`, then `python`; elsewhere `python3`, then `python`.) A non-zero exit means
    nothing was created (a bad name, or the study already exists): report the message.
 3. Check that the mirror folder it printed exists and holds pages. If it does not, say so and point
    to the onboarding skill and the fetcher; the lessons have nothing to cite until it is filled.

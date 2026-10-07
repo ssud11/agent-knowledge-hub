@@ -16,18 +16,14 @@ import shutil
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+from fetchers.llms_txt_fetcher import read_mirror_dir  # noqa: E402  (the one shared helper)
 TEMPLATE = os.path.join(ROOT, "skills", "new-study", "template")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def mirror_dir(data_dir):
-    path = os.path.join(data_dir, "mirror-dir.txt")
-    if os.path.isfile(path):
-        with open(path, encoding="utf-8") as fh:
-            line = fh.readline().strip()
-        if line:
-            return os.path.abspath(os.path.expanduser(line))
-    return os.path.join(os.path.expanduser("~"), "agent-knowledge-hub-mirror")
+    return read_mirror_dir(data_dir)
 
 
 def create(data_dir, name, parent=None):
@@ -40,17 +36,27 @@ def create(data_dir, name, parent=None):
         raise FileExistsError("study or practice folder already exists: %s" % study)
     values = {"{{STUDY_NAME}}": name, "{{MIRROR_DIR}}": mirror_dir(data_dir),
               "{{PRACTICE_DIR}}": practice}
-    os.makedirs(practice)
-    for dp, _, files in os.walk(TEMPLATE):
-        dest_dir = os.path.join(study, os.path.relpath(dp, TEMPLATE))
-        os.makedirs(dest_dir, exist_ok=True)
-        for fn in files:
-            with open(os.path.join(dp, fn), encoding="utf-8") as fh:
-                text = fh.read()
-            for key, val in values.items():
-                text = text.replace(key, val)
-            with open(os.path.join(dest_dir, fn), "w", encoding="utf-8", newline="\n") as fh:
-                fh.write(text)
+    made = []
+    try:
+        os.makedirs(practice)
+        made.append(practice)
+        for dp, _, files in os.walk(TEMPLATE):
+            dest_dir = os.path.join(study, os.path.relpath(dp, TEMPLATE))
+            if not os.path.isdir(study):
+                made.append(study)
+            os.makedirs(dest_dir, exist_ok=True)
+            for fn in files:
+                with open(os.path.join(dp, fn), encoding="utf-8") as fh:
+                    text = fh.read()
+                for key, val in values.items():
+                    text = text.replace(key, val)
+                with open(os.path.join(dest_dir, fn), "w", encoding="utf-8",
+                          newline="\n") as fh:
+                    fh.write(text)
+    except BaseException:
+        for path in made:  # only what this run created (both paths were absent at the start)
+            shutil.rmtree(path, ignore_errors=True)
+        raise
     return study, practice
 
 
@@ -62,7 +68,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
     try:
         study, practice = create(args.data_dir, args.name, args.parent)
-    except (ValueError, FileExistsError) as exc:
+    except (ValueError, FileExistsError, OSError) as exc:
         print("ERROR: %s" % exc, file=sys.stderr)
         return 1
     print("Study folder: %s" % study)

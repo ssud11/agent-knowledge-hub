@@ -29,18 +29,20 @@ The mirror is a folder of plain-markdown documentation pages, one subfolder per 
 2. Otherwise the mirror folder is `~/agent-knowledge-hub-mirror`. Read and Grep need an absolute path,
    so expand `~` to the user's home folder first.
 3. `Glob` `<mirror>/*/INDEX.md`. Each match is a mirrored site, named by its folder (the Gemini API docs
-   are `gemini-api`).
+   are `gemini-api`). If that Glob returns nothing (it can on Windows), do not conclude the mirror is
+   empty: `Glob` `<mirror>/*` to list the site folders, or, when the site is known, `Read`
+   `<mirror>/<site>/INDEX.md` directly (for Gemini, `<mirror>/gemini-api/INDEX.md`). Only a failed
+   Read of that file means the site is missing.
 
 ## If the mirror or the site is missing
 
 Say so plainly. Do not answer the question from memory. Tell the user to fetch it:
 
 ```
-python "${CLAUDE_PLUGIN_ROOT}/fetchers/llms_txt_fetcher.py" --data-dir "${CLAUDE_PLUGIN_DATA}"
+<py> "${CLAUDE_PLUGIN_ROOT}/fetchers/llms_txt_fetcher.py" --data-dir "${CLAUDE_PLUGIN_DATA}"
 ```
 
-(On Windows `py -3` or `python`; the script needs Python 3.10 or later and takes a few minutes for the
-Gemini docs.) Then offer to answer once it has run. If the mirror exists but has no site for the tool
+`<py>` in the commands below is the Python 3.10+ command: on Windows `py -3`, then `python`; elsewhere `python3`, then `python`. It takes a few minutes for the Gemini docs. Then offer to answer once it has run. If the mirror exists but has no site for the tool
 asked about, say that site is not mirrored and that the add-docs skill adds it.
 
 ## Procedure
@@ -54,7 +56,9 @@ asked about, say that site is not mirrored and that the add-docs skill adds it.
    question spans features.
 4. Answer from what the page says. If two pages disagree, say so and cite both. If the pages do not
    answer it, say that rather than filling the gap from memory.
-5. Cite the mirror file path you Read, as an absolute path, next to the claim it supports.
+5. Cite the mirror file path you Read, as an absolute path, next to the claim it supports. Cite only
+   a file you have Read in this turn (a window around a Grep hit counts). A Grep hit is a pointer,
+   never a citation: if you only Grepped a page, Read it before citing it.
 
 ## Rules
 
