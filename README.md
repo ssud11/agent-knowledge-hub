@@ -39,6 +39,22 @@ Inside a Claude Code session, run `/plugin marketplace add ssud11/agent-knowledg
 
 By default, the mirror is stored in `agent-knowledge-hub-mirror` in your home folder. Pages are fetched to your machine and never committed to this repo.
 
+## Set up, refresh, add tools, learn
+
+- **Onboarding.** Right after installing, ask Claude to "set up the knowledge hub". The onboarding skill asks where to keep your mirrors (it suggests `agent-knowledge-hub-mirror` in your home folder), saves the choice, adds the Gemini API docs to your sites file, and proves it works with a small test fetch. It ends with `DRY RUN PASSED` or `DRY RUN FAILED`; it does not claim success otherwise. Run it again any time to move the mirror.
+- **Refresh.** `/agent-knowledge-hub:refresh` re-fetches every mirrored site and prints what was added, changed and removed, with a page count per site.
+- **Add a tool.** Ask Claude to "mirror the docs of" a tool, or to add it to the hub. The add-docs skill checks what kind of site it is. A site with an `llms.txt` takes one line in your sites file. A GitHub repo of markdown docs or an HTML site gets a small fetcher written for it. Either way it ends with a dry run. Your sites file and any written fetchers live in the plugin's data folder, which survives updates.
+- **Start a study.** Ask Claude to "start a new study" on a topic, for example Gemini function calling. The new-study skill creates a study folder whose `CLAUDE.md` requires every lesson claim to cite the mirror page it came from, plus a practice folder beside it.
+- **Teach.** The lessons come from Matt Pocock's teach skill, which is installed separately:
+
+  ```bash
+  claude plugin marketplace add https://github.com/mattpocock/skills.git
+  claude plugin install mattpocock-skills@mattpocock
+  ```
+
+  Then start Claude Code inside the study folder, so its `CLAUDE.md` loads, and run `/mattpocock-skills:teach` with your topic.
+- **Example.** [`examples/find-session-lesson`](examples/find-session-lesson) holds a lesson written this way, a short Gemini function calling lesson with a `find_session(time)` Python snippet, and the same lesson as an OKF bundle.
+
 ## How it works
 
 - **Mirror.** `fetchers/llms_txt_fetcher.py` reads a site's `llms.txt`, fetches every listed page as markdown, and writes an `INDEX.md`. Each run records what was added, changed and removed in `CHANGES.txt`, by content hash. A failed fetch keeps the previous copy, requests are paced, and the fetcher will not wipe most of a mirror in one run. Python standard library only.
